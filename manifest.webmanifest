@@ -1,0 +1,16 @@
+{
+  "name": "Tide",
+  "short_name": "Tide",
+  "description": "Three-week wave training: barbell top sets with velocity back-offs, kettlebell clean & press, SkiErg conditioning.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#eef5f3",
+  "theme_color": "#0e5e6f",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
