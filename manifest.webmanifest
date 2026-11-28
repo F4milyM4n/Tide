@@ -1,7 +1,7 @@
 {
   "name": "Tide",
   "short_name": "Tide",
-  "description": "Three-week wave training: barbell top sets with velocity back-offs, kettlebell clean & press, SkiErg conditioning.",
+  "description": "Delta 20 wave training: barbell lifts and kettlebell clean & press with heavy sets between moderate sets, SkiErg conditioning.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

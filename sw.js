@@ -1,5 +1,5 @@
 // Tide service worker — bump VERSION on every release so clients pick up the new files.
-const VERSION = 'tide-v1.0.0';
+const VERSION = 'tide-v2.0.0';
 const ASSETS = [
   './',
   './index.html',

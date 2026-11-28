@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <style>
 /* VOICE: a calm coach's logbook — precise numbers, few words, trusted mid-set
-   IDEA: a tide table — each week's loads rise while volume ebbs
+   IDEA: a tide table — volume rises and ebbs in Delta 20 waves while heavy sets climb through each cycle
    PICTURE: the session itself; a three-column tide strip on Today
    COLOUR and TYPE: deep sea teal, foam ground, coral only for "do this now"; system type, tabular figures
    LAYOUT: one column, sticky tabs on top, sticky timer at the bottom */
@@ -66,6 +66,13 @@ table{width:100%;border-collapse:collapse;font-size:15px}th,td{padding:8px 6px;b
 #toast{position:fixed;left:50%;top:84px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:12px;z-index:20;max-width:90vw;font-size:15px;opacity:0;transition:opacity .25s;pointer-events:none}
 #toast.on{opacity:1}
 @media(prefers-reduced-motion:reduce){#toast{transition:none}}
+.wave{display:grid;gap:4px;height:110px;align-items:end;margin:12px 0 4px}
+.wave i{display:block;border-radius:5px 5px 0 0;background:var(--sea2);border:1px solid var(--line);border-bottom:0}
+.wave i.done{background:var(--sea);border-color:var(--sea)}.wave i.now{background:var(--hot);border-color:var(--hot)}
+.wlab{display:grid;gap:4px;text-align:center;font-size:13px;color:var(--mut);border-top:2px solid var(--line);padding-top:4px}.wlab b{color:var(--ink)}
+.set{grid-template-columns:86px minmax(0,1fr) minmax(0,1fr)}.set .k small{font-weight:600;color:var(--mut)}
+.set.hv .k{color:var(--warn)}.hvt{color:var(--warn)}
+tr.cur td{background:var(--sea2)}
 </style>
 </head>
 <body>
@@ -83,74 +90,141 @@ table{width:100%;border-collapse:collapse;font-size:15px}th,td{padding:8px 6px;b
 <div id="toast" role="status"></div>
 <script>
 {
-const KEY='tide.v1';
-const WK={1:{name:'Accumulation',top:.79,reps:5,rpe:7,bo:.65,boReps:6,boSets:4},2:{name:'Transmutation',top:.86,reps:3,rpe:8,bo:.70,boReps:4,boSets:5},3:{name:'Realization',top:.91,reps:'1–2',rpe:8,bo:.75,boReps:3,boSets:4}};
-const HIIT={1:{n:8,w:20,r:50},2:{n:6,w:40,r:100},3:{n:4,w:60,r:150}};
+/* ---------- Tide wave engine (pure; no DOM) ---------- */
+const RANK=[0,.15,.22,.28,.35];
+const CYC=[{name:'Intro',mult:1,order:[1,2,3,4]},{name:'Load',mult:1.2,order:[1,3,4,2]},{name:'Taper',mult:1.44,order:[3,4,2,1]}];
+const PEAK=1.44*.35;
+const WEEKS=Array.from({length:12},(_,i)=>{const ci=Math.floor(i/4),pos=i%4,rank=CYC[ci].order[pos];return{w:i+1,ci,pos,rank,cycle:CYC[ci].name,frac:CYC[ci].mult*RANK[rank]/PEAK}});
+/* Soviet ratios across the week's lifts, and the same ratios inverted for each lift's heavy share. */
+const SHARE={deadlift:.15,squat:.22,bench:.28,kb:.35},HSHARE={deadlift:.35,squat:.28,bench:.22,kb:.15};
+const RAMP=[.85,.87,.90,.92];
+/* Reps to failure -> fraction of 1RM (NSCA table). */
+const RM=[[1,100],[2,95],[3,93],[4,90],[5,87],[6,85],[7,83],[8,80],[9,77],[10,75],[11,70],[12,67],[15,65],[20,58],[30,45]];
+function repsToPct(r){if(r<=1)return 1;for(let i=1;i<RM.length;i++){const[a,pa]=RM[i-1],[b,pb]=RM[i];if(r<=b)return(pa+(pb-pa)*(r-a)/(b-a))/100}return .45}
+function pctToReps(p){for(let i=1;i<RM.length;i++){const[a,pa]=RM[i-1],[b,pb]=RM[i];if(p*100>=pb)return Math.round(a+(b-a)*(pa-p*100)/(pa-pb))}return 30}
+/* Sets are a third to two-thirds of the reps possible at that weight. */
+const setRange=max=>[Math.max(1,Math.ceil(max/3-1e-9)),Math.max(1,Math.floor(2*max/3+1e-9))];
+const r5=v=>Math.floor(v/5+.5)*5;
+const d20=(a,b)=>Math.abs(b/a-1)>=0.2-1e-9;
+/* For each total, the fewest sets of mn..mx reps where every set differs from the one before by at least 20%. */
+const SEQ={};
+function seqTable(mn,mx,top=160){const key=mn+'-'+mx;if(SEQ[key])return SEQ[key];
+  const best={};/* best[t][s] = {n, prev} : fewest sets reaching total t ending with a set of s */
+  for(let s=mn;s<=mx;s++)best[s]={[s]:{n:1,prev:null}};
+  for(let t=mn;t<=top;t++){if(!best[t])continue;for(const s in best[t]){const cur=best[t][s];for(let r=mx;r>=mn;r--){if(!d20(+s,r))continue;const nt=t+r;if(nt>top)continue;best[nt]=best[nt]||{};if(!best[nt][r]||best[nt][r].n>cur.n+1)best[nt][r]={n:cur.n+1,prev:+s}}}}
+  const out={};for(const t in best){let bs=null;for(let s=mx;s>=mn;s--)if(best[t][s]&&(bs==null||best[t][s].n<best[t][bs].n))bs=s;
+    const seq=[];let tt=+t,ss=bs;while(ss!=null){seq.unshift(ss);const p=best[tt][ss].prev;tt-=ss;ss=p}out[t]=seq}
+  return SEQ[key]=out}
+function heavyWork(budget,pct,max,minSets=1){const c=1/(100-100*pct),[mn,mx]=setRange(max);let reps=Math.max(mn*minSets,Math.round(budget/c));
+  const n=Math.max(minSets,Math.ceil(reps/mx));if(n*mn>reps)reps=n*mn;const b=Math.floor(reps/n),r=reps%n;
+  return{pct,max,mn,mx,reps,sets:Array.from({length:n},(_,i)=>b+(i<r?1:0)),inol:reps*c}}
+/* Moderate total nearest the target that splits cleanly, and at least 20% away from last week's total for this lift. */
+function pickTotal(raw,heavy,prev,table,dir){const ts=Object.keys(table).map(Number).filter(t=>prev==null||d20(prev,t+heavy));
+  /* closest to target; a step against the wave's direction counts as one rep further away */
+  const cost=t=>Math.abs(t-raw)+(prev!=null&&dir&&Math.sign(t+heavy-prev)!==dir?3:0);
+  /* never step against the wave when a total in the right direction exists */
+  const ok=ts.filter(t=>prev==null||!dir||Math.sign(t+heavy-prev)===dir),pool=ok.length?ok:ts;
+  pool.sort((a,b)=>cost(a)-cost(b)||b-a);return pool[0]}
+function interleave(mod,heavy){const out=[],h=[...heavy];mod.forEach(r=>{out.push({k:'mod',r});if(h.length)out.push({k:'heavy',r:h.shift()})});h.forEach(r=>out.push({k:'heavy',r}));return out}
+const LIFTS=['deadlift','bench','squat','kb'];
+/* Whole block: every lift, every week. */
+function blockPlan(se){const L=se.blockLen,T=se.cap/SHARE.bench,prev={},out=[];
+  for(let w=1;w<=L;w++){const W=WEEKS[w-1],row={...W,lifts:{}};
+    for(const id of LIFTS){const kb=id==='kb',inol=T*W.frac*SHARE[id];
+      const mp=kb?repsToPct(se.kb.modMax):.75,mmax=kb?se.kb.modMax:10,[mn,mx]=setRange(mmax);
+      const hp=kb?repsToPct(se.kb.heavyMax):RAMP[W.pos],hmax=kb?se.kb.heavyMax:pctToReps(hp);
+      const h=heavyWork(inol*HSHARE[id],hp,hmax,kb?1:2),tab=seqTable(mn,mx);
+      const dir=w>1?Math.sign(W.frac-WEEKS[w-2].frac):0,raw=Math.max(mn,(inol-h.inol)*(100-100*mp)),tot=pickTotal(raw,h.reps,prev[id]??null,tab,dir);prev[id]=tot+h.reps;
+      const e=kb?null:se.e1rm[id],load=kb?se.kb.modLoad:r5(e*mp),hload=kb?se.kb.heavyLoad:Math.max(r5(e*hp),r5(e*mp)+5);
+      row.lifts[id]={id,inol,target:inol,mp,mn,mx,load,hload,mod:tab[tot],modReps:tot,h,tot:tot+h.reps,seq:interleave(tab[tot],h.sets),
+        actual:tot/(100-100*mp)+h.inol}}
+    out.push(row)}
+  return out}
+/* Readiness tiers. Reduced: about 20% fewer moderate reps, one heavy set. Minimum: one heavy set, nothing else. */
+function tierRx(rx,tier){if(tier==='full')return rx;const tab=seqTable(rx.mn,rx.mx);
+  if(tier==='reduced'){const ts=Object.keys(tab).map(Number).filter(t=>t<=Math.max(rx.mn,Math.round(rx.modReps*.8)));const t=ts.length?Math.max(...ts):rx.mn;
+    const hs=[rx.h.mn];return{...rx,mod:tab[t],modReps:t,h:{...rx.h,reps:rx.h.mn,sets:hs},tot:t+rx.h.mn,seq:interleave(tab[t],hs)}}
+  return{...rx,mod:[],modReps:0,h:{...rx.h,reps:rx.h.mn,sets:[rx.h.mn]},tot:rx.h.mn,seq:[{k:'heavy',r:rx.h.mn}]}}
+/* SkiErg intervals: mirror of the lifting wave (rank 5 − lifting rank) with no +20% per cycle, split 56/44 between the bench and clean & press days, each day's rounds at least 20% apart week to week. */
+const INT={w:30,r:60,split:{B:.56,D:.44}};
+function hiitPlan(se){const RK=[0,.15,.22,.28,.35],ws=WEEKS.slice(0,se.blockLen),out={B:[],D:[]};let pb=null,pd=null;
+  /* nearest whole number of rounds (at least 3) that is 20%+ away from last week's, and, for the C&P day, 20%+ below the bench day */
+  const pick=(t,prev,cap)=>{let best=null;for(let n=3;n<=60;n++){if(prev!=null&&!d20(prev,n))continue;if(cap!=null&&n>cap)continue;
+    const c=Math.abs(n-t)+(prev!=null&&Math.sign(n-prev)!==Math.sign(t-prev)?3:0);if(best==null||c<best.c)best={n,c}}return best?best.n:3};
+  for(const W of ws){const base=se.hiitPeak*RK[5-W.rank]/.35;
+    const b=pick(base*INT.split.B,pb,null),d=pick(base*INT.split.D,pd,Math.floor(b/1.2+1e-9));out.B.push(b);out.D.push(d);pb=b;pd=d}
+  return out}
+if(typeof module!=='undefined')module.exports={hiitPlan,INT,WEEKS,CYC,SHARE,HSHARE,RAMP,repsToPct,pctToReps,setRange,seqTable,heavyWork,blockPlan,tierRx};
+
+/* ---------- app ---------- */
+const VERSION='2.0.0',KEY='tide.v2',OLDKEY='tide.v1';
 const BUMP={bench:5,squat:10,deadlift:10};
-const LIFT={squat:'Squat',bench:'Bench press',deadlift:'Deadlift'};
+const LIFT={squat:'Squat',bench:'Bench press',deadlift:'Deadlift',kb:'Kettlebell clean & press'};
+const HEAVY_REST=180;
 const S={
-  A:{name:'Deadlift',lift:'deadlift',bo:'rpe',rest:180,pair:'Push-ups or ab wheel between sets',dens:{key:'A',a:'Pull-ups',b:'Push-ups (floor)'},cond:'z2',z2:20},
-  B:{name:'Bench press',lift:'bench',bo:'vbt',every:120,pair:'Ring rows in each interval',dens:{key:'B',a:'Skull crushers',b:'Curls'},cond:'hiit'},
-  C:{name:'Squat',lift:'squat',bo:'vbt',every:150,pair:'Pull-ups in each interval',dens:null,cond:'z2',z2:35},
-  D:{name:'Kettlebell clean & press',kb:true,dens:{key:'D',a:'Ring rows',b:'Curls'},cond:'hiit'}
+  A:{name:'Deadlift',lift:'deadlift',stop:'rpe',every:180,pair:'Push-ups or ab wheel between sets',dens:{key:'A',a:'Pull-ups',b:'Push-ups (floor)'},cond:'z2',z2:20},
+  B:{name:'Bench press',lift:'bench',stop:'vbt',every:120,pair:'Ring rows in each interval',dens:{key:'B',a:'Skull crushers',b:'Curls'},cond:'hiit'},
+  C:{name:'Squat',lift:'squat',stop:'vbt',every:150,pair:'Pull-ups in each interval',dens:null,cond:'z2',z2:35},
+  D:{name:'Kettlebell clean & press',lift:'kb',kb:true,stop:'rpe',every:90,dens:{key:'D',a:'Ring rows',b:'Curls'},cond:'hiit'}
 };
 const ORDER=['A','B','C','D'];
 const RPE_SEQ=[100,97.8,95.5,93.9,92.2,90.7,89.2,87.8,86.3,85.0,83.7,82.4,81.1,79.9,78.6,77.4,76.2,75.1,73.9];
 const rpePct=(reps,rpe)=>{const i=Math.round((reps-1)*2+(10-rpe)*2);return reps>=1&&reps<=6&&rpe>=6&&rpe<=10&&i>=0&&i<RPE_SEQ.length?RPE_SEQ[i]:null};
-const r5=v=>Math.floor(v/5+0.5)*5;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad=n=>String(n).padStart(2,'0');
 const iso=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 const mmss=s=>`${Math.floor(s/60)}:${pad(s%60)}`;
+const pct=x=>Math.round(x*100)+'%';
 const $=id=>document.getElementById(id);
 
-const DEF=()=>({settings:{tmIs90:true,e1rm:{squat:390/.9,bench:250/.9,deadlift:395/.9},vl:10,bar:45,
-  kb:{1:{label:'2 × 35 lb',load:35,mode:'double',reps:3,cap:5},2:{label:'2 × 53 lb',load:53,mode:'double',reps:2,cap:4},3:{label:'1 × 70 lb',load:70,mode:'single',reps:2,cap:3}}},
-  wave:{cycle:1,week:1},logs:[],vbase:{},dens:{},flags:{bump:{},kb:{}},body:[],draft:{}});
+const DEF=()=>({settings:{tmIs90:true,e1rm:{squat:390/.9,bench:250/.9,deadlift:395/.9},vl:15,bar:45,blockLen:12,cap:1.7,hiitPeak:22,
+  kb:{modLabel:'2 × 53 lb',modLoad:53,modMax:12,heavyLabel:'70 lb',heavyLoad:70,heavyMax:5}},
+  rev:2,wave:{block:1,week:1},logs:[],vbase:{},dens:{},flags:{bump:{},kb:false},body:[],draft:{}});
 let st;
-function load(){let d=DEF();try{const raw=localStorage.getItem(KEY);if(raw){const p=JSON.parse(raw);d={...d,...p,settings:{...d.settings,...p.settings},flags:{...d.flags,...p.flags}}}}catch(e){}return d}
+function load(){let d=DEF();try{const raw=localStorage.getItem(KEY);
+  if(raw){const p=JSON.parse(raw);d={...d,...p,settings:{...d.settings,...p.settings,kb:{...d.settings.kb,...(p.settings&&p.settings.kb||{})}},flags:{...d.flags,...p.flags}};
+    /* preview builds defaulted to volume 1.4 and a 10% stop; move untouched defaults to 1.7 and 15% */
+    if(!p.rev){if(d.settings.cap===1.4)d.settings.cap=1.7;if(d.settings.vl===10)d.settings.vl=15}}
+  else{const old=localStorage.getItem(OLDKEY);if(old){const o=JSON.parse(old),os=o.settings||{};
+    d.settings={...d.settings,tmIs90:os.tmIs90??true,e1rm:{...d.settings.e1rm,...(os.e1rm||{})},vl:(os.vl&&os.vl!==10)?os.vl:15,bar:os.bar||45};
+    d.logs=(o.logs||[]).map(l=>({...l,v1:true}));d.body=o.body||[];d.dens=o.dens||{}}}}catch(e){}return d}
 function save(){try{localStorage.setItem(KEY,JSON.stringify(st))}catch(e){}}
 st=load();
 
 let view={tab:'today',sess:null,tier:'full'},notices=[];
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove('on'),2600)}
-const weekLogs=()=>st.logs.filter(l=>l.cycle===st.wave.cycle&&l.week===st.wave.week);
+const weekLogs=()=>st.logs.filter(l=>!l.v1&&l.block===st.wave.block&&l.week===st.wave.week);
+const doneKeys=()=>ORDER.filter(k=>weekLogs().some(l=>l.k===k&&l.counted));
+const curWeek=()=>WEEKS[st.wave.week-1];
+const plan=()=>blockPlan(st.settings);
 
 /* ---------- wave progression ---------- */
-function rollWeek(){
-  const w=st.wave,msgs=[];
-  if(w.week<3){w.week++;return msgs}
-  w.week=1;w.cycle++;
-  for(const l of Object.keys(st.flags.bump||{})){if(st.flags.bump[l]){st.settings.e1rm[l]+=BUMP[l];msgs.push(`${LIFT[l]} e1RM +${BUMP[l]} lb`)}}
-  let kbDone=false;
-  for(const k of [1,2,3]){if(!st.flags.kb[k])continue;const c=st.settings.kb[k];
-    if(c.reps<c.cap&&!kbDone){c.reps++;kbDone=true;msgs.push(`Kettlebell week ${k}: ${c.reps} reps/min`)}
-    else if(c.reps>=c.cap)msgs.push(`Kettlebell week ${k} is at its cap: move up a bell in Setup`)}
-  st.flags={bump:{},kb:{}};
-  return msgs;
-}
-const doneKeys=()=>ORDER.filter(k=>weekLogs().some(l=>l.k===k&&l.counted));
+function rollWeek(){const w=st.wave,se=st.settings,msgs=[];
+  if(w.week<se.blockLen){w.week++;return msgs}
+  for(const l of Object.keys(st.flags.bump||{})){if(st.flags.bump[l]){se.e1rm[l]+=BUMP[l];msgs.push(`${LIFT[l]} e1RM +${BUMP[l]} lb`)}}
+  if(st.flags.kb){se.kb.heavyMax++;msgs.push(`${se.kb.heavyLabel}: max reps now ${se.kb.heavyMax}`)}
+  st.flags={bump:{},kb:false};w.block++;w.week=1;msgs.unshift(`Block ${w.block-1} complete. Volume resets for block ${w.block}.`);
+  return msgs}
 
 /* ---------- prescriptions ---------- */
-function presc(k,tier){
-  const s=S[k],w=st.wave.week,P=WK[w],o={k,s,w,P,tier};
-  if(s.lift){const e=st.settings.e1rm[s.lift];o.e1rm=e;o.top=r5(e*P.top);o.bo=r5(e*P.bo);o.boReps=P.boReps;o.boSets=tier==='full'?P.boSets:tier==='reduced'?1:0}
-  if(s.kb){const c=st.settings.kb[w],min=tier==='full'?20:tier==='reduced'?15:10;o.kb={...c,min,perArm:c.mode==='double'?c.reps*min:c.reps*min/2}}
+function presc(k,tier){const s=S[k],W=curWeek(),base=plan()[st.wave.week-1].lifts[s.lift],rx=tierRx(base,tier),o={k,s,W,tier,rx};
+  o.items=rx.seq.map(q=>({...q,load:q.k==='mod'?rx.load:rx.hload}));
   o.dens=s.dens&&tier!=='minimum'?{...s.dens,min:tier==='full'?10:6}:null;
-  o.cond=tier==='minimum'?null:tier==='reduced'?{type:'z2',min:15}:s.cond==='hiit'?{type:'hiit',...HIIT[w]}:{type:'z2',min:s.z2};
-  return o;
-}
-function warmups(top,lift){const bar=st.settings.bar,out=[{w:lift==='deadlift'?135:bar,r:lift==='deadlift'?5:10}];
+  o.cond=tier==='minimum'?null:tier==='reduced'?{type:'z2',min:15}:s.cond==='hiit'?{type:'hiit',n:hiitPlan(st.settings)[k][st.wave.week-1],w:INT.w,r:INT.r}:{type:'z2',min:s.z2};
+  return o}
+function warmups(top){const bar=st.settings.bar,out=[{w:bar,r:8}];
   for(const[p,r]of[[.5,5],[.65,3],[.8,2],[.9,1]]){const v=r5(top*p);if(v>out[out.length-1].w&&v<top)out.push({w:v,r})}return out}
 function plates(load){const bar=st.settings.bar;let per=(load-bar)/2;if(per<=0)return'bar only';const out=[];
   for(const p of[45,35,25,10,5,2.5]){while(per>=p-1e-9){out.push(p);per-=p}}return out.join(' · ')+' / side'}
+const modLabel=(o)=>o.s.kb?st.settings.kb.modLabel:`${o.rx.load} lb`;
+const heavyLabel=(o)=>o.s.kb?st.settings.kb.heavyLabel:`${o.rx.hload} lb`;
+const setsTxt=a=>a.join(', ');
 
 /* ---------- timer ---------- */
 let T=null,tick=null,ac=null,wl=null;
 function beep(f,d){try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=f;o.connect(g);g.connect(ac.destination);g.gain.setValueAtTime(.3,ac.currentTime);g.gain.exponentialRampToValueAtTime(.001,ac.currentTime+d);o.start();o.stop(ac.currentTime+d)}catch(e){}
   try{navigator.vibrate&&navigator.vibrate(d>.2?250:60)}catch(e){}}
 const PH={
-  interval:(n,s,l)=>Array.from({length:n},(_,i)=>({s,label:`${l} ${i+1} of ${n}`})),
   hiit:(n,w,r)=>{const a=[];for(let i=0;i<n;i++){a.push({s:w,label:`Work ${i+1} of ${n}`});if(i<n-1)a.push({s:r,label:'Rest',rest:true})}return a},
   count:(min,l)=>[{s:Math.round(min*60),label:l}]
 };
@@ -162,152 +236,147 @@ function step(){if(!T||T.paused!=null)return;let rem=Math.ceil((T.end-Date.now()
     T.end+=T.phases[T.i].s*1000;rem=Math.ceil((T.end-Date.now())/1000);beep(T.phases[T.i].rest?523:1046,.3)}
   else if(rem<=3&&rem!==T.last)beep(740,.08);
   T.last=rem;$('tttl').textContent=T.title;$('tlab').textContent=T.phases[T.i].label;$('ttime').textContent=mmss(Math.max(rem,0))}
-function stopTimer(quiet){clearInterval(tick);tick=null;T=null;$('tbar').hidden=true;try{wl&&wl.release()}catch(e){}wl=null}
+function stopTimer(){clearInterval(tick);tick=null;T=null;$('tbar').hidden=true;try{wl&&wl.release()}catch(e){}wl=null}
 $('tpause').onclick=()=>{if(!T)return;if(T.paused==null){T.paused=T.end-Date.now();$('tpause').textContent='Resume'}else{T.end=Date.now()+T.paused;T.paused=null;$('tpause').textContent='Pause';step()}};
 $('tstop').onclick=()=>stopTimer();
 
 /* ---------- views ---------- */
-function header(){const w=st.wave;$('wk').textContent=`Cycle ${w.cycle} · Week ${w.week} · ${WK[w.week].name}`;
+function header(){const w=st.wave,W=curWeek();$('wk').textContent=`Block ${w.block} · Week ${w.week} of ${st.settings.blockLen} · ${W.cycle}`;
   document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-current',b.dataset.tab===view.tab&&!view.sess?'page':'false'))}
 
-function tideStrip(){const vol=w=>{const P=WK[w];return(P.top*(w===3?2:P.reps)+P.bo*P.boReps*P.boSets)};
-  const cols=[1,2,3].map(w=>{const P=WK[w],ih=Math.round((P.top-.6)/.35*100),vh=Math.round(vol(w)/20*100);
-    return`<div class="col ${w===st.wave.week?'':'dim'}"><div class="bar" style="height:${ih}%" title="Top-set intensity"></div><div class="bar v" style="height:${vh}%" title="Volume"></div></div>`}).join('');
-  const labs=[1,2,3].map(w=>{const P=WK[w];return`<div class="${w===st.wave.week?'now':''}"><b>Week ${w}</b>${P.reps} @ ${Math.round(P.top*100)}% · ${P.boSets}×${P.boReps}</div>`}).join('');
-  return`<div class="tide" aria-label="Intensity rises and volume falls across the three weeks">${cols}</div><div class="tlab">${labs}</div><p class="mut" style="margin-top:8px">Dark bar: top-set intensity. Light bar: volume (top set plus back-offs at full).</p>`}
+function tideStrip(){const L=st.settings.blockLen,ws=WEEKS.slice(0,L);
+  const bars=ws.map(W=>`<i class="${W.w<st.wave.week?'done':W.w===st.wave.week?'now':''}" style="height:${Math.round(W.frac*100)}%" title="Week ${W.w}: ${pct(W.frac)} of peak volume"></i>`).join('');
+  const labs=CYC.slice(0,L/4).map((c,i)=>`<div><b>${c.name}</b><br>weeks ${i*4+1}–${i*4+4}</div>`).join('');
+  return`<div class="wave" style="grid-template-columns:repeat(${L},minmax(0,1fr))" role="img" aria-label="Volume of each week in the block; this week is highlighted">${bars}</div>
+  <div class="wlab" style="grid-template-columns:repeat(${L/4},minmax(0,1fr))">${labs}</div>`}
 
-/* next session: first not done this week, skipping squat/deadlift the day after the other */
+function sessLine(k){const o=presc(k,'full'),rx=o.rx;
+  return o.s.kb?`${esc(st.settings.kb.modLabel)}: ${setsTxt(rx.mod)} · ${esc(st.settings.kb.heavyLabel)}: ${setsTxt(rx.h.sets)} per arm`
+    :`${setsTxt(rx.mod)} @ ${rx.load} · heavy ${setsTxt(rx.h.sets)} @ ${rx.hload}`}
+/* next session: first not done this week, skipping squat the day after deadlift (and the reverse) */
 function nextUp(){const dk=doneKeys(),todo=ORDER.filter(k=>!dk.includes(k));if(!todo.length)return null;
   const last=st.logs[st.logs.length-1],y=new Date();y.setDate(y.getDate()-1);
   const recent=last&&(last.date===iso(new Date())||last.date===iso(y))?last.k:null;
   const clash=k=>(recent==='A'&&k==='C')||(recent==='C'&&k==='A');
   return todo.find(k=>!clash(k))||todo[0]}
-function vToday(){
-  const logs=weekLogs(),nx=nextUp();
-  const dk=doneKeys();
-  const list=ORDER.map((k,i)=>{const done=dk.includes(k),p=presc(k,'full');
-    const sub=S[k].lift?`Top ${p.P.reps} × ${p.top} lb · RPE ${p.P.rpe}`:`${p.kb.label} · ${p.kb.reps}/min × ${p.kb.min} min`;
-    return`<button class="sess ${k===nx?'next':''}" data-open="${k}"><span class="d">${i+1}</span><span class="n"><b>${S[k].name}</b><span class="mut">${sub}</span></span>${done?`<span class="tag done">Done</span>`:k===nx?'<span class="tag">Next up</span>':''}</button>`}).join('');
+function vToday(){const nx=nextUp(),dk=doneKeys(),W=curWeek(),hp=RAMP[W.pos];
+  const list=ORDER.map((k,i)=>{const done=dk.includes(k);
+    return`<button class="sess ${k===nx?'next':''}" data-open="${k}"><span class="d">${i+1}</span><span class="n"><b>${S[k].name}</b><span class="mut">${sessLine(k)}</span></span>${done?`<span class="tag done">Done</span>`:k===nx?'<span class="tag">Next up</span>':''}</button>`}).join('');
   const left=4-dk.length;
   return`${notices.map(n=>`<div class="note">${esc(n)}</div>`).join('')}
-  <div class="card"><h2>Week ${st.wave.week}: ${WK[st.wave.week].name}</h2>${tideStrip()}</div>
+  <div class="card"><h2>Week ${st.wave.week}: ${W.cycle}</h2><p class="mut" style="margin:0">Volume ${pct(W.frac)} of the block's peak · moderate sets at 75% · heavy sets at ${pct(hp)} (kettlebell: the ${esc(st.settings.kb.heavyLabel)})</p>${tideStrip()}</div>
   ${list}
   <p class="mut">Train in any order, on any days. Next up follows the list, but skips squat the day after deadlift (and the reverse) to spare your low back.</p>
   <div class="card"><div class="row sp"><span class="mut">${left} session${left===1?'':'s'} left in this week. The wave advances when all four are done, however many days that takes.</span>
   <button class="btn alt sm" id="adv">Skip to next week</button></div></div>`}
 
 function vSession(k){
-  const p=presc(k,view.tier),s=S[k],d=st.draft[k]||{},v=(id,def='')=>esc(d[id]??def);
+  const o=presc(k,view.tier),s=o.s,rx=o.rx,d=st.draft[k]||{},v=(id,def='')=>esc(d[id]??def),W=o.W;
   const tiers=[['full','Full'],['reduced','Reduced'],['minimum','Minimum']].map(([t,l])=>`<button aria-pressed="${view.tier===t}" data-tier="${t}">${l}</button>`).join('');
   let h=`<button class="btn alt sm" id="back">← Week</button>
-  <h2 style="margin-top:12px">${s.name}</h2><p class="mut">Week ${p.w} · ${p.P.name}</p>
+  <h2 style="margin-top:12px">${s.name}</h2><p class="mut">Block ${st.wave.block} · Week ${st.wave.week} · ${W.cycle}</p>
   <div class="card"><h3>Readiness</h3><div class="seg">${tiers}</div>
-  <p class="mut" style="margin-top:8px">${view.tier==='full'?'Everything as written.':view.tier==='reduced'?'One back-off set, a 6-minute density block, easy SkiErg only. Still counts toward the wave.':s.kb?'10-minute EMOM, then stop. Counts if you finish any minutes.':'Work up to the top set at RPE 7 or less and stop. Counts if you hit it.'}</p></div>`;
-  if(s.lift){
-    const wu=warmups(p.top,s.lift).map(x=>`<span>${x.w} × ${x.r}</span>`).join('');
-    h+=`<div class="card"><h3>1 · Top set</h3><div class="big">${p.top} lb</div><p>${p.P.reps} rep${p.P.reps===1?'':'s'} @ RPE ${view.tier==='minimum'?'≤ 7':p.P.rpe} <span class="mut">· ${Math.round(p.P.top*100)}% of e1RM ${Math.round(p.e1rm)}</span></p>
-    <p class="mut">${plates(p.top)}</p><p class="mut" style="margin-bottom:0">Warm-up</p><div class="warm">${wu}</div>
-    <div class="g4"><label>Load<input inputmode="decimal" id="topLoad" value="${v('topLoad',p.top)}"></label><label>Reps<input inputmode="numeric" id="topReps" value="${v('topReps')}"></label><label>RPE<input inputmode="decimal" id="topRpe" value="${v('topRpe')}"></label><label>Velocity m/s<input inputmode="decimal" id="topVel" value="${v('topVel')}"></label></div>
-    <div id="topMsg"></div></div>`;
-    if(p.boSets){
-      const rows=Array.from({length:p.boSets},(_,i)=>`<div class="set" data-set="${i}"><span class="k">Set ${i+1}</span><label>Reps<input inputmode="numeric" id="bo${i}r" value="${v('bo'+i+'r')}"></label><label>${s.bo==='vbt'?'Fastest rep m/s':'RPE'}<input inputmode="decimal" id="bo${i}x" value="${v('bo'+i+'x')}"></label></div>`).join('');
-      h+=`<div class="card"><h3>2 · Back-offs</h3><div class="big">${p.bo} lb</div><p>Up to ${p.boSets} × ${p.boReps} · ${Math.round(p.P.bo*100)}% <span class="mut">· ${plates(p.bo)}</span></p>
-      <p class="mut">${s.bo==='vbt'?`One set every ${mmss(s.every)}. ${esc(s.pair)}. Stop after any set whose fastest rep is more than ${st.settings.vl}% slower than set 1's.`:`Full rest. ${esc(s.pair)}. Stop after any set above RPE 8. Velocity here is for trends only.`}</p>
-      <div class="row" style="margin-bottom:8px">${s.bo==='vbt'?`<button class="btn sm" data-timer="bo">Start ${p.boSets} × ${mmss(s.every)} timer</button>`:`<button class="btn sm" data-timer="rest">Rest ${mmss(s.rest)}</button>`}</div>
-      ${rows}<div id="boMsg"></div></div>`}
-  }
-  if(s.kb){const c=p.kb;
-    h+=`<div class="card"><h3>1 · Clean &amp; press EMOM</h3><div class="big">${esc(c.label)}</div><p>${c.reps} rep${c.reps===1?'':'s'} every minute × ${c.min} min${c.mode==='single'?', switching arms each minute':''}</p>
-    <p class="mut">${c.perArm} reps per arm · ${Math.round(c.perArm*c.load).toLocaleString()} lb per arm${view.tier==='full'?` · earn +1 rep/min next cycle: all 20 minutes clean, last minute RPE ≤ 7`:''}</p>
-    <div class="row" style="margin-bottom:8px"><button class="btn sm" data-timer="emom">Start ${c.min}-min EMOM</button></div>
-    <div class="g2"><label>Minutes completed<input inputmode="numeric" id="kbMin" value="${v('kbMin')}"></label><label>Last-minute RPE<input inputmode="decimal" id="kbRpe" value="${v('kbRpe')}"></label></div></div>`}
-  if(p.dens){const ds=st.dens[p.dens.key]||{},tgt=ds.base?Math.ceil(ds.base*1.2):null;
-    h+=`<div class="card"><h3>${s.kb?2:3} · Density block, ${p.dens.min} min</h3><p>${esc(p.dens.a)} + ${esc(p.dens.b)}, alternating sets of about 5, 2–3 reps short of failure.</p>
-    <p class="mut">${p.dens.min<10?'Short block: logged, not compared.':tgt?`Baseline ${ds.base} total reps · last ${ds.last??'—'}. Reach ${tgt} and add load next time.${ds.last>=tgt?' <b class="ok">You hit it: add load today and tick the box.</b>':''}`:'First 10-minute block sets your baseline.'}</p>
-    <div class="row" style="margin-bottom:8px"><button class="btn sm" data-timer="dens">Start ${p.dens.min}-min block</button></div>
-    <div class="g2"><label>${esc(p.dens.a)} reps<input inputmode="numeric" id="densA" value="${v('densA')}"></label><label>${esc(p.dens.b)} reps<input inputmode="numeric" id="densB" value="${v('densB')}"></label></div>
+  <p class="mut" style="margin-top:8px">${view.tier==='full'?'Everything as written.':view.tier==='reduced'?'About 20% fewer moderate reps, one heavy set, easy SkiErg only. Still counts toward the wave.':'One heavy set at RPE 7 or less, then stop. Counts if you do it.'}</p></div>`;
+  const isKb=!!s.kb,xLab=i=>o.items[i].k==='heavy'||s.stop==='rpe'?'RPE':'Fastest rep m/s';
+  const wu=isKb?'':warmups(rx.load).map(x=>`<span>${x.w} × ${x.r}</span>`).join('');
+  const rows=o.items.map((q,i)=>`<div class="set ${q.k==='heavy'?'hv':''}" data-set="${i}"><span class="k">${q.k==='heavy'?'Heavy':'Set'} ${i+1}<br><small>${q.r}${isKb&&q.k==='heavy'?'/arm':''} @ ${isKb?esc(q.k==='heavy'?st.settings.kb.heavyLabel:st.settings.kb.modLabel):q.load}</small></span><label>Reps<input inputmode="numeric" id="s${i}r" value="${v('s'+i+'r')}"></label><label>${xLab(i)}<input inputmode="decimal" id="s${i}x" value="${v('s'+i+'x')}"></label></div>`).join('');
+  h+=`<div class="card"><h3>1 · ${isKb?'Clean &amp; press':'Main lift'}</h3>
+  ${rx.mod.length?`<div class="big">${esc(modLabel(o))}</div><p>${setsTxt(rx.mod)} ${isKb?'doubles':'reps'} <span class="mut">· ${pct(rx.mp)} · sets of ${rx.mn}–${rx.mx}${isKb?'':' · '+plates(rx.load)}</span></p>`:''}
+  <p><b class="hvt">Heavy:</b> ${setsTxt(rx.h.sets)}${isKb?' per arm':''} @ ${esc(heavyLabel(o))} <span class="mut">· ${pct(rx.h.pct)}${isKb?'':' · '+plates(rx.hload)}</span></p>
+  ${wu?`<p class="mut" style="margin-bottom:0">Warm-up</p><div class="warm">${wu}</div>`:''}
+  <p class="mut">${isKb?`Double clean &amp; press sets on a ${mmss(s.every)} clock; each heavy set is single-arm, both arms, then rest about ${mmss(HEAVY_REST)}. Stop if a set goes above RPE 8.`:s.stop==='vbt'?`One moderate set every ${mmss(s.every)}. ${esc(s.pair)}. Heavy sets go where listed, with about ${mmss(HEAVY_REST)} rest. Stop the moderate sets after any set whose fastest rep is more than ${st.settings.vl}% slower than set 1's.`:`Full rest. ${esc(s.pair)}. Heavy sets go where listed. Stop after any set above RPE 8.`}</p>
+  <div class="row" style="margin-bottom:8px"><button class="btn sm" data-timer="sets">Start set timer</button></div>
+  ${rows}<div id="setMsg"></div></div>`;
+  if(o.dens){const ds=st.dens[o.dens.key]||{},tgt=ds.base?Math.ceil(ds.base*1.2):null;
+    h+=`<div class="card"><h3>2 · Density block, ${o.dens.min} min</h3><p>${esc(o.dens.a)} + ${esc(o.dens.b)}, alternating sets of about 5, 2–3 reps short of failure.</p>
+    <p class="mut">${o.dens.min<10?'Short block: logged, not compared.':tgt?`Baseline ${ds.base} total reps · last ${ds.last??'—'}. Reach ${tgt} and add load next time.${ds.last>=tgt?' <b class="ok">You hit it: add load today and tick the box.</b>':''}`:'First 10-minute block sets your baseline.'}</p>
+    <div class="row" style="margin-bottom:8px"><button class="btn sm" data-timer="dens">Start ${o.dens.min}-min block</button></div>
+    <div class="g2"><label>${esc(o.dens.a)} reps<input inputmode="numeric" id="densA" value="${v('densA')}"></label><label>${esc(o.dens.b)} reps<input inputmode="numeric" id="densB" value="${v('densB')}"></label></div>
     <label class="chk"><input type="checkbox" id="densReset" ${d.densReset?'checked':''}> New load today (this block becomes the baseline)</label></div>`}
-  if(p.cond){const c=p.cond,n=(s.kb?2:3)+(p.dens?1:0);
+  if(o.cond){const c=o.cond,n=o.dens?3:2;
     h+=`<div class="card"><h3>${n} · SkiErg</h3>${c.type==='hiit'?`<div class="big">${c.n} × ${c.w} s</div><p>Hard, with ${c.r} s easy between · ${mmss(c.n*c.w+(c.n-1)*c.r)} total</p>`:`<div class="big">${c.min} min easy</div><p>Conversational pace. Shallow hip hinge, drive with the lats.</p>`}
-    <div class="row"><button class="btn sm" data-timer="cond">Start timer</button><label class="chk" style="margin:0"><input type="checkbox" id="condDone" ${d.condDone?'checked':''}> Done</label></div></div>`}
+    <div class="row"><button class="btn sm" data-timer="cond">Start timer</button><label class="chk" style="margin:0"><input type="checkbox" id="condDone" ${d.condDone?'checked':''}> Done</label></div>
+    ${c.type==='hiit'?`<label style="margin-top:8px">Average watts across the hard rounds (optional)<input inputmode="numeric" id="condW" value="${v('condW')}"></label><p class="mut" style="margin:6px 0 0">${lastWatts(k)}Go by feel: hard but repeatable to the last round. Rising watts at the same effort is your progress.</p>`:''}</div>`}
   h+=`<div class="card"><label>Notes<textarea id="notes">${v('notes')}</textarea></label></div>
   <button class="btn hot" id="saveS" style="width:100%">Save session</button>`;
-  return h;
-}
+  return h}
 function collect(){const d={};document.querySelectorAll('#app input,#app textarea').forEach(e=>{if(!e.id)return;d[e.id]=e.type==='checkbox'?e.checked:e.value});return d}
 
-function liveFeedback(){
-  const k=view.sess;if(!k)return;const s=S[k],p=presc(k,view.tier),d=collect();
-  if(s.lift&&$('topMsg')){const m=[];const load=+d.topLoad,reps=+d.topReps,rpe=+d.topRpe,vel=+d.topVel;
-    const base=st.vbase[`${s.lift}-${p.w}`];
-    if(vel&&base&&vel<=base-0.05&&view.tier==='full')m.push(`<div class="note">Top set is ${(base-vel).toFixed(2)} m/s slower than last time at this week (${base.toFixed(2)}). Consider <button class="btn sm alt" data-tier="reduced">Reduced</button></div>`);
-    else if(vel&&base)m.push(`<p class="mut">Last time at this week: ${base.toFixed(2)} m/s.</p>`);
-    const pct=load&&reps&&rpe?rpePct(reps,rpe):null;
-    if(pct){const est=load/(pct/100);if(Math.abs(est-p.e1rm)>=5)m.push(`<p class="mut">This set estimates your 1RM at ${Math.round(est)} (plan uses ${Math.round(p.e1rm)}). <button class="btn sm alt" id="rebase" data-est="${est.toFixed(1)}">Use ${Math.round(est)}</button></p>`)}
-    $('topMsg').innerHTML=m.join('')}
-  if(s.lift&&$('boMsg')){let stop=-1;const v1=+d.bo0x;
-    for(let i=0;i<p.boSets;i++){const x=+d['bo'+i+'x'];if(!x)continue;
-      if(s.bo==='vbt'&&i>0&&v1&&x<v1*(1-st.settings.vl/100)){stop=i;break}
-      if(s.bo==='rpe'&&x>8){stop=i;break}}
-    document.querySelectorAll('.set').forEach(r=>r.classList.toggle('off',stop>=0&&+r.dataset.set>stop));
-    $('boMsg').innerHTML=s.bo==='vbt'&&v1?`<p class="mut" style="margin-top:8px">Cutoff: ${(v1*(1-st.settings.vl/100)).toFixed(2)} m/s</p>${stop>=0?`<div class="note">Set ${stop+1} dropped below the cutoff. Back-offs are done.</div>`:''}`:stop>=0?`<div class="note">Set ${stop+1} went above RPE 8. Back-offs are done.</div>`:''}
-}
+function liveFeedback(){const k=view.sess;if(!k)return;const o=presc(k,view.tier),s=o.s,d=collect(),m=[];
+  let stop=-1;const firstMod=o.items.findIndex(q=>q.k==='mod'),v1=firstMod>=0?+d['s'+firstMod+'x']:0;
+  o.items.forEach((q,i)=>{if(stop>=0)return;const x=+d['s'+i+'x'];if(!x)return;
+    if(q.k==='mod'&&s.stop==='vbt'&&i!==firstMod&&v1&&x<v1*(1-st.settings.vl/100))stop=i;
+    if((q.k==='heavy'||s.stop==='rpe')&&x>8&&!(q.k==='mod'&&s.stop==='vbt'))stop=i});
+  document.querySelectorAll('.set').forEach(r=>r.classList.toggle('off',stop>=0&&+r.dataset.set>stop));
+  if(s.stop==='vbt'&&v1)m.push(`<p class="mut" style="margin-top:8px">Velocity cutoff: ${(v1*(1-st.settings.vl/100)).toFixed(2)} m/s</p>`);
+  if(stop>=0)m.push(`<div class="note">Set ${stop+1} hit the stop rule. The rest of today's sets are done.</div>`);
+  if(!s.kb){const hv=o.items.map((q,i)=>({q,i})).filter(z=>z.q.k==='heavy'&&+d['s'+z.i+'r']&&+d['s'+z.i+'x']).pop();
+    if(hv){const reps=+d['s'+hv.i+'r'],rpe=+d['s'+hv.i+'x'],p=rpePct(reps,rpe);
+      if(p){const est=hv.q.load/(p/100),e=st.settings.e1rm[s.lift];if(Math.abs(est-e)>=5)m.push(`<p class="mut">That heavy set estimates your 1RM at ${Math.round(est)} (plan uses ${Math.round(e)}). <button class="btn sm alt" id="rebase" data-est="${est.toFixed(1)}">Use ${Math.round(est)}</button></p>`)}}}
+  $('setMsg').innerHTML=m.join('')}
 
 function saveSession(){
-  const k=view.sess,s=S[k],p=presc(k,view.tier),d=collect(),w=st.wave.week;
-  const log={id:Date.now(),date:iso(new Date()),k,cycle:st.wave.cycle,week:w,tier:view.tier,notes:d.notes||''};let counted=view.tier!=='minimum';
-  if(s.lift){log.top={load:+d.topLoad||0,reps:+d.topReps||0,rpe:+d.topRpe||0,vel:+d.topVel||0};
-    log.bo=[];for(let i=0;i<p.boSets;i++){if(d['bo'+i+'r']||d['bo'+i+'x'])log.bo.push({r:+d['bo'+i+'r']||0,x:+d['bo'+i+'x']||0})}
-    if(view.tier==='minimum')counted=log.top.reps>0;
-    if(log.top.vel)st.vbase[`${s.lift}-${w}`]=log.top.vel;
-    if(w===3&&log.top.reps>=1&&log.top.rpe&&log.top.rpe<=8&&log.top.load>=p.top)st.flags.bump[s.lift]=true}
-  if(s.kb){log.kb={min:+d.kbMin||0,rpe:+d.kbRpe||0,label:p.kb.label,reps:p.kb.reps};if(view.tier==='minimum')counted=log.kb.min>0;
-    if(view.tier==='full'&&log.kb.min>=20&&log.kb.rpe&&log.kb.rpe<=7)st.flags.kb[w]=true}
-  if(p.dens){const tot=(+d.densA||0)+(+d.densB||0);log.dens={a:+d.densA||0,b:+d.densB||0,min:p.dens.min};
-    if(tot&&p.dens.min===10){const ds=st.dens[p.dens.key]||{};if(d.densReset||!ds.base)ds.base=tot;ds.last=tot;st.dens[p.dens.key]=ds}}
-  if(p.cond)log.cond={...p.cond,done:!!d.condDone};
+  const k=view.sess,s=S[k],o=presc(k,view.tier),d=collect(),W=o.W,se=st.settings;
+  const sets=o.items.map((q,i)=>({k:q.k,load:q.load,plan:q.r,reps:+d['s'+i+'r']||0,x:+d['s'+i+'x']||0}));
+  const log={id:Date.now(),date:iso(new Date()),k,block:st.wave.block,week:st.wave.week,tier:view.tier,sets,notes:d.notes||''};
+  let counted=view.tier!=='minimum'||sets.some(x=>x.k==='heavy'&&x.reps>0);
+  const heavy=sets.filter(x=>x.k==='heavy'&&x.reps>0);
+  if(!s.kb&&heavy.length){const first=heavy[0];if(first.x&&s.stop==='vbt')st.vbase[`${s.lift}-${W.pos}`]=first.x;
+    if(st.wave.week===se.blockLen&&heavy.some(x=>x.load>=o.rx.hload&&x.x&&x.x<=8))st.flags.bump[s.lift]=true}
+  if(s.kb&&st.wave.week===se.blockLen&&view.tier==='full'&&heavy.length===o.rx.h.sets.length&&heavy.every(x=>x.reps>=x.plan&&x.x&&x.x<=7))st.flags.kb=true;
+  if(o.dens){const tot=(+d.densA||0)+(+d.densB||0);log.dens={a:+d.densA||0,b:+d.densB||0,min:o.dens.min};
+    if(tot&&o.dens.min===10){const ds=st.dens[o.dens.key]||{};if(d.densReset||!ds.base)ds.base=tot;ds.last=tot;st.dens[o.dens.key]=ds}}
+  if(o.cond)log.cond={...o.cond,done:!!d.condDone,watts:+d.condW||null};
   log.counted=counted;st.logs.push(log);delete st.draft[k];
   if(doneKeys().length===ORDER.length){const was=st.wave.week,m=rollWeek();notices=[`Week ${was} complete. Now Week ${st.wave.week}.${m.length?' '+m.join(' · '):''}`]}
-  save();view.sess=null;view.tab='today';toast(counted?'Saved. Counts toward this week.':'Saved, but not counted toward the wave.');render();
-}
+  save();view.sess=null;view.tab='today';toast(counted?'Saved. Counts toward this week.':'Saved, but not counted toward the wave.');render()}
 
-function vPlan(){
-  const rows=l=>[1,2,3].map(w=>{const P=WK[w],e=st.settings.e1rm[l];return`<tr><td>Week ${w}</td><td>${P.reps} × ${r5(e*P.top)}</td><td>${P.boSets} × ${P.boReps} × ${r5(e*P.bo)}</td></tr>`}).join('');
-  const lifts=['squat','bench','deadlift'].map(l=>`<div class="card"><div class="row sp"><h3>${LIFT[l]}</h3><span class="mut">e1RM ${Math.round(st.settings.e1rm[l])}</span></div><div class="scroll"><table><tr><th>Week</th><th>Top set</th><th>Back-offs (max)</th></tr>${rows(l)}</table></div></div>`).join('');
-  const kb=[1,2,3].map(w=>{const c=st.settings.kb[w],pa=c.mode==='double'?c.reps*20:c.reps*10;return`<tr><td>Week ${w}</td><td>${esc(c.label)}</td><td>${c.reps}/min</td><td>${pa}</td><td>${Math.round(pa*c.load).toLocaleString()}</td></tr>`}).join('');
-  const hi=[1,2,3].map(w=>{const c=HIIT[w];return`<tr><td>Week ${w}</td><td>${c.n} × ${c.w} s</td><td>${c.r} s</td><td>${mmss(c.n*c.w+(c.n-1)*c.r)}</td></tr>`}).join('');
+function vPlan(){const se=st.settings,P=plan(),L=se.blockLen;
+  const tbl=id=>{const kb=id==='kb';const rows=P.map(W=>{const x=W.lifts[id];return`<tr class="${W.w===st.wave.week?'cur':''}"><td>${W.w}</td><td>${W.cycle}</td><td>${setsTxt(x.mod)}</td><td>${setsTxt(x.h.sets)}${kb?'/arm':''} @ ${kb?esc(se.kb.heavyLabel):pct(x.h.pct)}</td><td>${x.actual.toFixed(2)}</td></tr>`}).join('');
+    const x0=P[0].lifts[id];
+    return`<div class="card"><div class="row sp"><h3>${LIFT[id]}</h3><span class="mut">${kb?`${esc(se.kb.modLabel)} (${pct(x0.mp)}) · heavy ${esc(se.kb.heavyLabel)}`:`e1RM ${Math.round(se.e1rm[id])} · ${x0.load} lb at 75%`}</span></div>
+    <div class="scroll"><table><tr><th>Wk</th><th>Cycle</th><th>${kb?'Doubles':'Sets at 75%'}</th><th>Heavy</th><th>INOL</th></tr>${rows}</table></div>
+    ${kb?'':`<p class="mut" style="margin:8px 0 0">Heavy loads: ${RAMP.map(r=>`${pct(r)} = ${Math.max(r5(se.e1rm[id]*r),x0.load+5)}`).join(' · ')}</p>`}</div>`};
+  const HP=hiitPlan(se),hi=P.map((W,i)=>`<tr class="${W.w===st.wave.week?'cur':''}"><td>${W.w}</td><td>${W.cycle}</td><td>${HP.B[i]}</td><td>${HP.D[i]}</td><td>${mmss(HP.B[i]*INT.w+(HP.B[i]-1)*INT.r)}</td></tr>`).join('');
   const days=ORDER.map((k,i)=>`<tr><td>${i+1}</td><td style="text-align:left;white-space:normal">${S[k].name}${S[k].dens?` → ${S[k].dens.a} + ${S[k].dens.b}`:''} → SkiErg ${S[k].cond==='hiit'?'intervals':S[k].z2+' min easy'}</td></tr>`).join('');
-  return`<h2>The plan</h2><p class="mut">Loads round half-up to 5 lb. Back-off velocity stop: ${st.settings.vl}%.</p>
-  <div class="card"><h3>Week: four sessions, any days</h3><table>${days}</table></div>${lifts}
-  <div class="card"><h3>Kettlebell clean &amp; press, 20-min EMOM</h3><div class="scroll"><table><tr><th>Week</th><th>Bells</th><th>Reps</th><th>Per arm</th><th>lb / arm</th></tr>${kb}</table></div></div>
-  <div class="card"><h3>SkiErg intervals</h3><div class="scroll"><table><tr><th>Week</th><th>Work</th><th>Rest</th><th>Total</th></tr>${hi}</table></div></div>
-  <div class="card"><h3>Progression</h3><p>After week 3: a top single at RPE 8 or easier, at or above target, adds ${BUMP.bench} lb (bench) or ${BUMP.squat} lb (squat, deadlift) to that lift's e1RM.</p><p>Kettlebells: one week per cycle gains a rep per minute if all 20 minutes were clean with the last at RPE ≤ 7. At the cap, move up a bell.</p><p style="margin:0">Density: when a 10-minute total reaches 120% of its baseline, add load.</p></div>`}
+  return`<h2>The plan</h2><p class="mut">A ${L}-week block of 4-week cycles: Intro (lightest to heaviest week), Load (+20%), Taper (+44%, ending light). Each lift's reps change at least 20% week to week, and back-to-back sets differ by at least 20% too.</p>
+  <div class="card"><h3>Week: four sessions, any days</h3><table>${days}</table>
+  <p class="mut" style="margin:8px 0 0">Volume share of the week: deadlift 15%, squat 22%, bench 28%, clean &amp; press 35%. Heavy share of each lift, inverted: 35, 28, 22, 15%. Heavy sets ramp 85 → 87 → 90 → 92% through each cycle. Bench peaks at INOL ${se.cap}.</p></div>
+  ${['deadlift','squat','bench','kb'].map(tbl).join('')}
+  <div class="card"><h3>SkiErg intervals</h3><p class="mut">${INT.w} s hard / ${INT.r} s easy, by feel. Rounds mirror the lifting wave: the heaviest lifting week gets the fewest rounds and the lightest gets the most, with no +20% per cycle. Split 56% bench day / 44% clean &amp; press day. Weekly peak: ${se.hiitPeak} rounds.</p><div class="scroll"><table><tr><th>Wk</th><th>Cycle</th><th>Bench day</th><th>C&amp;P day</th><th>Longest</th></tr>${hi}</table></div></div>
+  <div class="card"><h3>Progression</h3><p>End of the block: a heavy single at 92% or more, at RPE 8 or easier, adds ${BUMP.bench} lb (bench) or ${BUMP.squat} lb (squat, deadlift) to that lift's e1RM. Volume then resets.</p><p>Kettlebells: if every ${esc(se.kb.heavyLabel)} set in the last week was done at RPE 7 or easier, its max reps goes up by one, which adds heavy reps next block.</p><p style="margin:0">Density: when a 10-minute total reaches 120% of its baseline, add load.</p></div>`}
 
+function lastWatts(k){const l=st.logs.slice().reverse().find(l=>!l.v1&&l.k===k&&l.cond&&l.cond.watts);return l?`Last time: ${l.cond.watts} W over ${l.cond.n} rounds. `:''}
+function logDetail(l){if(l.v1){let det='';
+    if(l.top)det=`${l.top.reps} × ${l.top.load} @ ${l.top.rpe||'?'} · ${l.bo.length} back-off${l.bo.length===1?'':'s'}`;
+    if(l.kb)det=`${esc(l.kb.label)} · ${l.kb.reps}/min · ${l.kb.min} min`;return det}
+  const s=S[l.k],m=l.sets.filter(x=>x.k==='mod'&&x.reps),h=l.sets.filter(x=>x.k==='heavy'&&x.reps);
+  return`${m.length?`${m.map(x=>x.reps).join(', ')} @ ${s.kb?'53s':m[0].load}`:'no moderate sets'}${h.length?` · heavy ${h.map(x=>x.reps+(x.x?` @${x.x}`:'')).join(', ')}`:''}${l.dens?` · density ${l.dens.a+l.dens.b}`:''}${l.cond&&l.cond.watts?` · SkiErg ${l.cond.n}r @ ${l.cond.watts} W`:''}`}
 function vLog(){
   const body=st.body.slice(-8).reverse().map(b=>`<tr><td>${esc(b.date)}</td><td>${b.weight||'—'}</td><td>${b.waist||'—'}</td></tr>`).join('');
   const ws=st.body.filter(b=>b.weight).slice(-7),avg=ws.length?(ws.reduce((a,b)=>a+b.weight,0)/ws.length).toFixed(1):null;
-  const logs=st.logs.slice().reverse().slice(0,40).map(l=>{const s=S[l.k];let det='';
-    if(l.top)det=`${l.top.reps} × ${l.top.load} @ ${l.top.rpe||'?'}${l.top.vel?` · ${l.top.vel} m/s`:''} · ${l.bo.length} back-off${l.bo.length===1?'':'s'}`;
-    if(l.kb)det=`${esc(l.kb.label)} · ${l.kb.reps}/min · ${l.kb.min} min`;
-    if(l.dens)det+=` · density ${l.dens.a+l.dens.b}`;
-    return`<tr><td style="white-space:normal">${esc(l.date)}<br><span class="mut">C${l.cycle} W${l.week} · ${l.tier}${l.counted?'':' · not counted'}</span></td><td style="text-align:left;white-space:normal"><b>${s.name}</b><br><span class="mut">${det}</span></td><td><button class="btn alt sm" data-del="${l.id}">Delete</button></td></tr>`}).join('');
+  const logs=st.logs.slice().reverse().slice(0,40).map(l=>{const s=S[l.k];
+    return`<tr><td style="white-space:normal">${esc(l.date)}<br><span class="mut">${l.v1?`v1 · C${l.cycle} W${l.week}`:`B${l.block} W${l.week}`} · ${l.tier}${l.counted?'':' · not counted'}</span></td><td style="text-align:left;white-space:normal"><b>${s.name}</b><br><span class="mut">${logDetail(l)}</span></td><td><button class="btn alt sm" data-del="${l.id}">Delete</button></td></tr>`}).join('');
   return`<h2>Log</h2><div class="card"><h3>Body</h3><div class="g3"><label>Weight lb<input inputmode="decimal" id="bw"></label><label>Waist in<input inputmode="decimal" id="bwaist"></label><label>&nbsp;<button class="btn" id="addBody" style="width:100%">Add</button></label></div>
   ${avg?`<p style="margin-top:10px">7-entry weight average: <b>${avg} lb</b></p>`:'<p class="mut" style="margin-top:10px">Weigh in daily or a few times a week; the average matters, not single days. Measure waist at the navel every two weeks.</p>'}
   ${body?`<div class="scroll"><table><tr><th>Date</th><th>Weight</th><th>Waist</th></tr>${body}</table></div>`:''}</div>
   <div class="card"><h3>Sessions</h3>${logs?`<div class="scroll"><table>${logs}</table></div>`:'<p class="mut">No sessions yet.</p>'}</div>`}
 
-function vSetup(){const se=st.settings,tm=l=>Math.round(se.tmIs90?se.e1rm[l]*.9:se.e1rm[l]);
-  const kb=[1,2,3].map(w=>{const c=se.kb[w];return`<div class="card"><h3>Kettlebell week ${w}</h3><div class="g2"><label>Bells label<input data-kb="${w}" data-f="label" value="${esc(c.label)}"></label><label>Load per arm lb<input inputmode="decimal" data-kb="${w}" data-f="load" value="${c.load}"></label><label>Mode<select data-kb="${w}" data-f="mode"><option value="double" ${c.mode==='double'?'selected':''}>Double</option><option value="single" ${c.mode==='single'?'selected':''}>Single, alternating</option></select></label><label>Reps / min<input inputmode="numeric" data-kb="${w}" data-f="reps" value="${c.reps}"></label><label>Cap reps / min<input inputmode="numeric" data-kb="${w}" data-f="cap" value="${c.cap}"></label></div></div>`}).join('');
+function vSetup(){const se=st.settings,tm=l=>Math.round(se.tmIs90?se.e1rm[l]*.9:se.e1rm[l]),k=se.kb;
   return`<h2>Setup</h2>
   <div class="card"><h3>Training maxes</h3><div class="g3">${['squat','bench','deadlift'].map(l=>`<label>${LIFT[l]}<input inputmode="decimal" data-tm="${l}" value="${tm(l)}"></label>`).join('')}</div>
   <label class="chk"><input type="checkbox" id="tm90" ${se.tmIs90?'checked':''}> Training max is 90% of 1RM</label>
   <p class="mut" style="margin-top:8px">e1RM used: ${['squat','bench','deadlift'].map(l=>`${LIFT[l]} ${Math.round(se.e1rm[l])}`).join(' · ')}</p></div>
-  <div class="card"><h3>Back-offs and bar</h3><div class="g2"><label>Velocity stop %<input inputmode="decimal" id="vl" value="${se.vl}"></label><label>Bar weight lb<input inputmode="decimal" id="barw" value="${se.bar}"></label></div></div>
-  ${kb}
-  <div class="card"><h3>Wave position</h3><div class="g2"><label>Cycle<input inputmode="numeric" id="cyc" value="${st.wave.cycle}"></label><label>Week<select id="wsel">${[1,2,3].map(w=>`<option ${st.wave.week===w?'selected':''}>${w}</option>`).join('')}</select></label></div></div>
+  <div class="card"><h3>Block</h3><div class="g2"><label>Block length<select id="blen">${[4,8,12].map(n=>`<option value="${n}" ${se.blockLen===n?'selected':''}>${n} weeks</option>`).join('')}</select></label><label>Volume level (bench peak INOL)<input inputmode="decimal" id="cap" value="${se.cap}"></label></div>
+  <label style="margin-top:8px">SkiErg interval peak (rounds per week)<input inputmode="numeric" id="hpk" value="${se.hiitPeak}"></label>
+  <p class="mut" style="margin-top:8px">4 weeks = Intro; 8 = Intro + Load; 12 = Intro + Load + Taper. Volume level scales every lift together; 1.7 is the starting point. If your heavy-set e1RM hasn't risen by the end of a block, raise it 0.2; if you aren't recovering, lower it 0.2. Interval peak: 22 rounds averages about 8 minutes of hard work a week.</p></div>
+  <div class="card"><h3>Kettlebells</h3><div class="g2"><label>Main bells<input id="kbml" value="${esc(k.modLabel)}"></label><label>Max reps with them<input inputmode="numeric" id="kbmm" value="${k.modMax}"></label>
+  <label>Heavy bell<input id="kbhl" value="${esc(k.heavyLabel)}"></label><label>Max reps per arm<input inputmode="numeric" id="kbhm" value="${k.heavyMax}"></label></div></div>
+  <div class="card"><h3>Velocity stop and bar</h3><div class="g2"><label>Velocity stop %<input inputmode="decimal" id="vl" value="${se.vl}"></label><label>Bar weight lb<input inputmode="decimal" id="barw" value="${se.bar}"></label></div></div>
+  <div class="card"><h3>Position</h3><div class="g2"><label>Block<input inputmode="numeric" id="blk" value="${st.wave.block}"></label><label>Week<select id="wsel">${Array.from({length:se.blockLen},(_,i)=>`<option ${st.wave.week===i+1?'selected':''}>${i+1}</option>`).join('')}</select></label></div></div>
   <div class="card"><h3>Backup</h3><p class="mut">Copy your data to keep it safe, or paste a backup to restore it.</p><textarea id="bk"></textarea>
   <div class="row" style="margin-top:8px"><button class="btn sm" id="exp">Copy backup</button><button class="btn alt sm" id="imp">Restore pasted backup</button><button class="btn alt sm" id="reset">Reset everything</button></div></div>
-  <p class="mut" style="text-align:center">Tide v1.0.0</p>`}
+  <p class="mut" style="text-align:center">Tide v${VERSION}</p>`}
 
 function render(){header();const a=$('app');
   a.innerHTML=view.sess?vSession(view.sess):view.tab==='plan'?vPlan():view.tab==='log'?vLog():view.tab==='setup'?vSetup():vToday();
@@ -325,32 +394,40 @@ $('app').addEventListener('click',e=>{
   if(t.id==='adv'){twoTap(t,()=>{const m=rollWeek();save();notices=['Moved to the next week. '+m.join(' · ')];render()});return}
   if(t.id==='saveS'){saveSession();return}
   if(t.id==='rebase'){const l=S[view.sess].lift;st.settings.e1rm[l]=+t.dataset.est;st.draft[view.sess]=collect();save();toast(`${LIFT[l]} e1RM set to ${Math.round(+t.dataset.est)}`);render();return}
-  if(t.dataset.timer){const p=presc(view.sess,view.tier),s=S[view.sess],x=t.dataset.timer;
-    if(x==='bo')startTimer(`${s.name} back-offs`,PH.interval(p.boSets,s.every,'Set'));
-    if(x==='rest')startTimer('Rest',PH.count(s.rest/60,'Next set when it ends'));
-    if(x==='emom')startTimer('Clean & press',PH.interval(p.kb.min,60,'Minute'));
-    if(x==='dens')startTimer('Density block',PH.count(p.dens.min,`${p.dens.a} + ${p.dens.b}`));
-    if(x==='cond')startTimer('SkiErg',p.cond.type==='hiit'?PH.hiit(p.cond.n,p.cond.w,p.cond.r):PH.count(p.cond.min,'Easy pace'));return}
+  if(t.dataset.timer){const o=presc(view.sess,view.tier),s=o.s,x=t.dataset.timer;
+    if(x==='sets')startTimer(`${s.name} sets`,o.items.map((q,i)=>({s:q.k==='heavy'?HEAVY_REST:s.every,label:`${q.k==='heavy'?'Heavy':'Set'} ${i+1} of ${o.items.length}: ${q.r}${s.kb&&q.k==='heavy'?'/arm':''} @ ${s.kb?(q.k==='heavy'?st.settings.kb.heavyLabel:st.settings.kb.modLabel):q.load}`})));
+    if(x==='dens')startTimer('Density block',PH.count(o.dens.min,`${o.dens.a} + ${o.dens.b}`));
+    if(x==='cond')startTimer('SkiErg',o.cond.type==='hiit'?PH.hiit(o.cond.n,o.cond.w,o.cond.r):PH.count(o.cond.min,'Easy pace'));return}
   if(t.dataset.del){twoTap(t,()=>{st.logs=st.logs.filter(l=>String(l.id)!==t.dataset.del);save();render()});return}
   if(t.id==='addBody'){const w=+$('bw').value||0,wa=+$('bwaist').value||0;if(!w&&!wa){toast('Enter a weight or waist');return}st.body.push({date:iso(new Date()),weight:w||null,waist:wa||null});save();render();return}
   if(t.id==='exp'){const s=JSON.stringify(st);$('bk').value=s;try{navigator.clipboard.writeText(s).then(()=>toast('Backup copied'),()=>toast('Select the text and copy it'))}catch(err){toast('Select the text and copy it')}return}
-  if(t.id==='imp'){try{const p=JSON.parse($('bk').value);if(!p.settings||!p.wave)throw 0;st={...DEF(),...p};save();toast('Backup restored');render()}catch(err){toast('That backup could not be read')}return}
+  if(t.id==='imp'){try{const p=JSON.parse($('bk').value);if(!p.settings||!p.wave||p.wave.block==null)throw 0;st={...DEF(),...p};save();toast('Backup restored');render()}catch(err){toast('That backup could not be read')}return}
   if(t.id==='reset'){twoTap(t,()=>{st=DEF();save();toast('Reset');render()});return}
 });
 $('app').addEventListener('input',e=>{if(view.sess){st.draft[view.sess]=collect();save();liveFeedback()}});
-$('app').addEventListener('change',e=>{const t=e.target,se=st.settings;if(view.sess)return;
-  if(t.dataset.tm){const v=+t.value;if(v>0){se.e1rm[t.dataset.tm]=se.tmIs90?v/.9:v}}
+$('app').addEventListener('change',e=>{const t=e.target,se=st.settings,n=+t.value;if(view.sess)return;
+  if(t.dataset.tm){if(n>0)se.e1rm[t.dataset.tm]=se.tmIs90?n/.9:n}
   else if(t.id==='tm90'){for(const l in se.e1rm){const tm=se.tmIs90?se.e1rm[l]*.9:se.e1rm[l];se.e1rm[l]=t.checked?tm/.9:tm}se.tmIs90=t.checked}
-  else if(t.id==='vl'){const v=+t.value;if(v>0&&v<50)se.vl=v}
-  else if(t.id==='barw'){const v=+t.value;if(v>0)se.bar=v}
-  else if(t.dataset.kb){const c=se.kb[t.dataset.kb],f=t.dataset.f;c[f]=f==='label'||f==='mode'?t.value:(+t.value||c[f])}
-  else if(t.id==='cyc'){const v=parseInt(t.value);if(v>0)st.wave.cycle=v}
-  else if(t.id==='wsel')st.wave.week=+t.value;
+  else if(t.id==='blen'){se.blockLen=n;if(st.wave.week>n)st.wave.week=n}
+  else if(t.id==='cap'){if(n>=.6&&n<=2.5)se.cap=n;else{toast('Volume level must be 0.6–2.5');render();return}}
+  else if(t.id==='hpk'){if(n>=8&&n<=60)se.hiitPeak=Math.round(n)}
+  else if(t.id==='kbml'){if(t.value.trim())se.kb.modLabel=t.value.trim();const m=t.value.match(/(\d+)\s*lb/);if(m)se.kb.modLoad=+m[1]}
+  else if(t.id==='kbhl'){if(t.value.trim())se.kb.heavyLabel=t.value.trim();const m=t.value.match(/(\d+)\s*lb/);if(m)se.kb.heavyLoad=+m[1]}
+  else if(t.id==='kbmm'){if(n>=3&&n<=30)se.kb.modMax=Math.round(n)}
+  else if(t.id==='kbhm'){if(n>=2&&n<=15)se.kb.heavyMax=Math.round(n)}
+  else if(t.id==='vl'){if(n>0&&n<50)se.vl=n}
+  else if(t.id==='barw'){if(n>0)se.bar=n}
+  else if(t.id==='blk'){const v=parseInt(t.value);if(v>0)st.wave.block=v}
+  else if(t.id==='wsel')st.wave.week=n;
   else return;
   save();render();toast('Saved')});
 
 render();
 if('serviceWorker' in navigator&&location.protocol==='https:'){try{navigator.serviceWorker.register('sw.js').catch(()=>{})}catch(e){}}
+}
+</script>
+</body>
+</html>
 }
 </script>
 </body>
